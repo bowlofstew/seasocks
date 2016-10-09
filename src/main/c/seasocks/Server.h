@@ -1,26 +1,26 @@
-// Copyright (c) 2013, Matt Godbolt
+// Copyright (c) 2013-2016, Matt Godbolt
 // All rights reserved.
-// 
-// Redistribution and use in source and binary forms, with or without 
+//
+// Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
-// 
-// Redistributions of source code must retain the above copyright notice, this 
+//
+// Redistributions of source code must retain the above copyright notice, this
 // list of conditions and the following disclaimer.
-// 
-// Redistributions in binary form must reproduce the above copyright notice, 
-// this list of conditions and the following disclaimer in the documentation 
+//
+// Redistributions in binary form must reproduce the above copyright notice,
+// this list of conditions and the following disclaimer in the documentation
 // and/or other materials provided with the distribution.
-// 
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" 
-// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE 
-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE 
-// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE 
-// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR 
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF 
-// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS 
-// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN 
-// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) 
-// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE 
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
 #pragma once
@@ -32,6 +32,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <list>
 #include <map>
 #include <memory>
@@ -49,7 +50,7 @@ class Response;
 
 class Server : private ServerImpl {
 public:
-    Server(std::shared_ptr<Logger> logger);
+    explicit Server(std::shared_ptr<Logger> logger);
     virtual ~Server();
 
     void addPageHandler(std::shared_ptr<PageHandler> handler);
@@ -89,7 +90,22 @@ public:
     // was an error.
     bool loop();
 
-    // Terminate any loop(). May be called from any thread.
+    // Runs a single iteration of the main loop, blocking for a given time.
+    // Returns immediately if terminate() has been called. Must be consistently
+    // called from the same thread. Returns an enum describing why it returned.
+    enum class PollResult {
+        Continue,
+        Terminated,
+        Error,
+    };
+    PollResult poll(int millisToBlock);
+
+    // Returns a file descriptor that can be polled for changes (e.g. by
+    // placing it in an epoll set. The poll() method above only need be called
+    // when this file descriptor is readable.
+    int fd() const { return _epollFd; }
+
+    // Terminate any loop() or poll(). May be called from any thread.
     void terminate();
 
     class Runnable {
@@ -97,8 +113,10 @@ public:
         virtual ~Runnable() {}
         virtual void run() = 0;
     };
-    // Execute a task on the SeaSocks thread.
+    // Execute a task on the Seasocks thread.
     void execute(std::shared_ptr<Runnable> runnable);
+    using Executable = std::function<void()>;
+    void execute(Executable toExecute);
 
 private:
     // From ServerImpl
@@ -111,16 +129,17 @@ private:
     virtual std::shared_ptr<Response> handle(const Request &request) override;
     virtual std::string getStatsDocument() const override;
     virtual void checkThread() const override;
+    virtual Server &server() override { return *this; }
 
     bool makeNonBlocking(int fd) const;
     bool configureSocket(int fd) const;
     void handleAccept();
-    std::shared_ptr<Runnable> popNextRunnable();
     void processEventQueue();
+    void runExecutables();
 
     void shutdown();
 
-    void checkAndDispatchEpoll();
+    void checkAndDispatchEpoll(int epollMillis);
     void handlePipe();
     enum NewState { KeepOpen, Close };
     NewState handleConnectionEvents(Connection* connection, uint32_t events);
@@ -144,8 +163,8 @@ private:
 
     std::list<std::shared_ptr<PageHandler>> _pageHandlers;
 
-    std::mutex _pendingRunnableMutex;
-    std::list<std::shared_ptr<Runnable>> _pendingRunnables;
+    std::mutex _pendingExecutableMutex;
+    std::list<Executable> _pendingExecutables;
 
     pid_t _threadId;
 

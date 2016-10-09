@@ -1,4 +1,4 @@
-// Copyright (c) 2013, Matt Godbolt
+// Copyright (c) 2013-2016, Matt Godbolt
 // All rights reserved.
 // 
 // Redistribution and use in source and binary forms, with or without 
@@ -57,7 +57,7 @@ public:
     }
 };
 
-int main(int argc, const char* argv[]) {
+int main(int /*argc*/, const char* /*argv*/[]) {
     std::shared_ptr<Logger> logger(new PrintfLogger(Logger::INFO));
 
     Server server(logger);

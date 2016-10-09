@@ -1,4 +1,4 @@
-// Copyright (c) 2013, Matt Godbolt
+// Copyright (c) 2013-2016, Matt Godbolt
 // All rights reserved.
 // 
 // Redistribution and use in source and binary forms, with or without 
@@ -47,7 +47,7 @@ using namespace std;
 
 class MyHandler: public WebSocket::Handler {
 public:
-    MyHandler(Server* server) : _server(server), _currentValue(0) {
+    explicit MyHandler(Server* server) : _server(server), _currentValue(0) {
         setValue(1);
     }
 
@@ -100,7 +100,7 @@ private:
     }
 };
 
-int main(int argc, const char* argv[]) {
+int main(int /*argc*/, const char* /*argv*/[]) {
     shared_ptr<Logger> logger(new PrintfLogger(Logger::DEBUG));
 
     Server server(logger);

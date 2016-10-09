@@ -1,4 +1,4 @@
-// Copyright (c) 2013, Matt Godbolt
+// Copyright (c) 2013-2016, Matt Godbolt
 // All rights reserved.
 // 
 // Redistribution and use in source and binary forms, with or without 
@@ -25,7 +25,8 @@
 
 #pragma once
 
-#include "seasocks/Response.h"
+#include "seasocks/SynchronousResponse.h"
+#include "seasocks/ToString.h"
 
 #include <sstream>
 #include <string>
@@ -36,7 +37,7 @@ class ResponseBuilder {
     ResponseCode _code;
     std::string _contentType;
     bool _keepAlive;
-    Response::Headers _headers;
+    SynchronousResponse::Headers _headers;
     std::shared_ptr<std::ostringstream> _stream;
 public:
     ResponseBuilder(ResponseCode code = ResponseCode::Ok);

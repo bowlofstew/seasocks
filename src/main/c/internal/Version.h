@@ -1,4 +1,4 @@
-// Copyright (c) 2013, Matt Godbolt
+// Copyright (c) 2013-2016, Matt Godbolt
 // All rights reserved.
 // 
 // Redistribution and use in source and binary forms, with or without 
@@ -27,5 +27,5 @@
 
 #ifndef SEASOCKS_VERSION_STRING
 // This stops Eclipse freaking out as it doesn't know this is set on GCC command line.
-#define SEASOCKS_VERSION_STRING "SeaSocks/unversioned"
+#define SEASOCKS_VERSION_STRING "Seasocks/unversioned"
 #endif

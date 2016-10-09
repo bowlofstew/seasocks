@@ -1,4 +1,4 @@
-// Copyright (c) 2013, Matt Godbolt
+// Copyright (c) 2013-2016, Matt Godbolt
 // All rights reserved.
 // 
 // Redistribution and use in source and binary forms, with or without 
@@ -32,7 +32,7 @@
 
 namespace seasocks {
 
-const int MAX_MESSAGE_LENGTH = 1024;
+constexpr int MAX_MESSAGE_LENGTH = 1024;
 
 #define PRINT_TO_MESSAGEBUF() \
     char messageBuf[MAX_MESSAGE_LENGTH]; \
@@ -45,6 +45,8 @@ void Logger::debug(const char* message, ...) {
 #ifdef LOG_DEBUG_INFO
     PRINT_TO_MESSAGEBUF();
     log(DEBUG, messageBuf);
+#else
+    (void)message;
 #endif
 }
 

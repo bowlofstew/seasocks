@@ -1,26 +1,26 @@
-// Copyright (c) 2013, Matt Godbolt
+// Copyright (c) 2013-2016, Matt Godbolt
 // All rights reserved.
-// 
-// Redistribution and use in source and binary forms, with or without 
+//
+// Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
-// 
-// Redistributions of source code must retain the above copyright notice, this 
+//
+// Redistributions of source code must retain the above copyright notice, this
 // list of conditions and the following disclaimer.
-// 
-// Redistributions in binary form must reproduce the above copyright notice, 
-// this list of conditions and the following disclaimer in the documentation 
+//
+// Redistributions in binary form must reproduce the above copyright notice,
+// this list of conditions and the following disclaimer in the documentation
 // and/or other materials provided with the distribution.
-// 
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" 
-// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE 
-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE 
-// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE 
-// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR 
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF 
-// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS 
-// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN 
-// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) 
-// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE 
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
 #include "internal/LogStream.h"
@@ -76,10 +76,10 @@ std::ostream& operator <<(std::ostream& o, const EventBits& b) {
     return o;
 }
 
-const int EpollTimeoutMillis = 500;  // Twice a second is ample.
-const int DefaultLameConnectionTimeoutSeconds = 10;
-int gettid() {
-    return syscall(SYS_gettid);
+constexpr int EpollTimeoutMillis = 500;  // Twice a second is ample.
+constexpr int DefaultLameConnectionTimeoutSeconds = 10;
+pid_t gettid() {
+    return static_cast<pid_t>(syscall(SYS_gettid));
 }
 
 }
@@ -128,6 +128,7 @@ void Server::shutdown() {
     // Stop listening to any further incoming connections.
     if (_listenSock != -1) {
         close(_listenSock);
+        _listenSock = -1;
     }
     // Disconnect and close any current connections.
     while (!_connections.empty()) {
@@ -197,6 +198,11 @@ bool Server::startListening(uint32_t hostAddr, int port) {
         return false;
     }
 
+    auto port16 = static_cast<uint16_t>(port);
+    if (port != port16) {
+        LS_ERROR(_logger, "Invalid port: " << port);
+        return false;
+    }
     _listenSock = socket(AF_INET, SOCK_STREAM, 0);
     if (_listenSock == -1) {
         LS_ERROR(_logger, "Unable to create listen socket: " << getLastError());
@@ -207,7 +213,7 @@ bool Server::startListening(uint32_t hostAddr, int port) {
     }
     sockaddr_in sock;
     memset(&sock, 0, sizeof(sock));
-    sock.sin_port = htons(port);
+    sock.sin_port = htons(port16);
     sock.sin_addr.s_addr = htonl(hostAddr);
     sock.sin_family = AF_INET;
     if (bind(_listenSock, reinterpret_cast<const sockaddr*>(&sock), sizeof(sock)) == -1) {
@@ -267,12 +273,12 @@ Server::NewState Server::handleConnectionEvents(Connection* connection, uint32_t
     return KeepOpen;
 }
 
-void Server::checkAndDispatchEpoll() {
-    const int maxEvents = 256;
+void Server::checkAndDispatchEpoll(int epollMillis) {
+    constexpr int maxEvents = 256;
     epoll_event events[maxEvents];
 
     std::list<Connection*> toBeDeleted;
-    int numEvents = epoll_wait(_epollFd, events, maxEvents, EpollTimeoutMillis);
+    int numEvents = epoll_wait(_epollFd, events, maxEvents, epollMillis);
     if (numEvents == -1) {
         if (errno != EINTR) {
             LS_ERROR(_logger, "Error from epoll_wait: " << getLastError());
@@ -281,7 +287,7 @@ void Server::checkAndDispatchEpoll() {
     }
     if (numEvents == maxEvents) {
         static time_t lastWarnTime = 0;
-        time_t now = time(NULL);
+        time_t now = time(nullptr);
         if (now - lastWarnTime >= 60) {
             LS_WARNING(_logger, "Full event queue; may start starving connections. "
                     "Will warn at most once a minute");
@@ -342,13 +348,18 @@ bool Server::serve(const char* staticPath, int port) {
 }
 
 bool Server::loop() {
+    if (_listenSock == -1) {
+        LS_ERROR(_logger, "Server not initialised");
+        return false;
+    }
+
     // Stash away "the" server thread id.
     _threadId = gettid();
 
     while (!_terminate) {
         // Always process events first to catch start up events.
         processEventQueue();
-        checkAndDispatchEpoll();
+        checkAndDispatchEpoll(EpollTimeoutMillis);
     }
     // Reasonable effort to ensure anything enqueued during terminate has a chance to run.
     processEventQueue();
@@ -357,28 +368,56 @@ bool Server::loop() {
     return _expectedTerminate;
 }
 
+Server::PollResult Server::poll(int millis) {
+    // Grab the thread ID on the first poll.
+    if (_threadId == 0) _threadId = gettid();
+    if (_threadId != gettid()) {
+        LS_ERROR(_logger, "poll() called from the wrong thread");
+        return PollResult::Error;
+    }
+    if (_listenSock == -1) {
+        LS_ERROR(_logger, "Server not initialised");
+        return PollResult::Error;
+    }
+    processEventQueue();
+    checkAndDispatchEpoll(millis);
+    if (!_terminate) return PollResult::Continue;
+
+    // Reasonable effort to ensure anything enqueued during terminate has a chance to run.
+    processEventQueue();
+    LS_INFO(_logger, "Server terminating");
+    shutdown();
+
+    return _expectedTerminate ? PollResult::Terminated : PollResult::Error;
+}
+
 void Server::processEventQueue() {
-    for (;;) {
-        std::shared_ptr<Runnable> runnable = popNextRunnable();
-        if (!runnable) break;
-        runnable->run();
-    }
-    time_t now = time(NULL);
-    if (now >= _nextDeadConnectionCheck) {
-        std::list<Connection*> toRemove;
-        for (auto it = _connections.cbegin(); it != _connections.cend(); ++it) {
-            time_t numSecondsSinceConnection = now - it->second;
-            auto connection = it->first;
-            if (connection->bytesReceived() == 0 && numSecondsSinceConnection >= _lameConnectionTimeoutSeconds) {
-                LS_INFO(_logger, formatAddress(connection->getRemoteAddress())
-                        << " : Killing lame connection - no bytes received after " << numSecondsSinceConnection << "s");
-                toRemove.push_back(connection);
-            }
-        }
-        for (auto it = toRemove.begin(); it != toRemove.end(); ++it) {
-            delete *it;
+    runExecutables();
+    time_t now = time(nullptr);
+    if (now < _nextDeadConnectionCheck) return;
+    std::list<Connection*> toRemove;
+    for (auto it = _connections.cbegin(); it != _connections.cend(); ++it) {
+        time_t numSecondsSinceConnection = now - it->second;
+        auto connection = it->first;
+        if (connection->bytesReceived() == 0
+            && numSecondsSinceConnection >= _lameConnectionTimeoutSeconds) {
+            LS_INFO(_logger, formatAddress(connection->getRemoteAddress())
+                    << " : Killing lame connection - no bytes received after "
+                             << numSecondsSinceConnection << "s");
+            toRemove.push_back(connection);
         }
     }
+    for (auto it = toRemove.begin(); it != toRemove.end(); ++it) {
+        delete *it;
+    }
+}
+
+void Server::runExecutables() {
+    decltype(_pendingExecutables) copy;
+    std::unique_lock<decltype(_pendingExecutableMutex)> lock(_pendingExecutableMutex);
+    copy.swap(_pendingExecutables);
+    lock.unlock();
+    for (auto &&ex : copy) ex();
 }
 
 void Server::handleAccept() {
@@ -404,7 +443,7 @@ void Server::handleAccept() {
         ::close(fd);
         return;
     }
-    _connections.insert(std::make_pair(newConnection, time(NULL)));
+    _connections.insert(std::make_pair(newConnection, time(nullptr)));
 }
 
 void Server::remove(Connection* connection) {
@@ -462,8 +501,12 @@ std::shared_ptr<WebSocket::Handler> Server::getWebSocketHandler(const char* endp
 }
 
 void Server::execute(std::shared_ptr<Runnable> runnable) {
-    std::unique_lock<decltype(_pendingRunnableMutex)> lock(_pendingRunnableMutex);
-    _pendingRunnables.push_back(runnable);
+    execute([runnable]{ runnable->run(); });
+}
+
+void Server::execute(std::function<void()> toExecute) {
+    std::unique_lock<decltype(_pendingExecutableMutex)> lock(_pendingExecutableMutex);
+    _pendingExecutables.emplace_back(std::move(toExecute));
     lock.unlock();
 
     uint64_t one = 1;
@@ -472,16 +515,6 @@ void Server::execute(std::shared_ptr<Runnable> runnable) {
             LS_ERROR(_logger, "Unable to post a wake event: " << getLastError());
         }
     }
-}
-
-std::shared_ptr<Server::Runnable> Server::popNextRunnable() {
-    std::lock_guard<decltype(_pendingRunnableMutex)> lock(_pendingRunnableMutex);
-    std::shared_ptr<Runnable> runnable;
-    if (!_pendingRunnables.empty()) {
-        runnable = _pendingRunnables.front();
-        _pendingRunnables.pop_front();
-    }
-    return runnable;
 }
 
 std::string Server::getStatsDocument() const {

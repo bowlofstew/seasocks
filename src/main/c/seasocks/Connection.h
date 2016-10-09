@@ -1,4 +1,4 @@
-// Copyright (c) 2013, Matt Godbolt
+// Copyright (c) 2013-2016, Matt Godbolt
 // All rights reserved.
 // 
 // Redistribution and use in source and binary forms, with or without 
@@ -27,6 +27,8 @@
 
 #include "seasocks/ResponseCode.h"
 #include "seasocks/WebSocket.h"
+#include "seasocks/ResponseWriter.h"
+#include "seasocks/TransferEncoding.h"
 
 #include <netinet/in.h>
 
@@ -71,9 +73,10 @@ public:
     virtual const std::string& getRequestUri() const override;
     virtual Request::Verb verb() const override { return Request::WebSocket; }
     virtual size_t contentLength() const override { return 0; }
-    virtual const uint8_t* content() const override { return NULL; }
+    virtual const uint8_t* content() const override { return nullptr; }
     virtual bool hasHeader(const std::string&) const override;
     virtual std::string getHeader(const std::string&) const override;
+    virtual Server &server() const override;
 
     void setLinger();
 
@@ -121,12 +124,22 @@ private:
     bool sendBadRequest(const std::string& reason);
     bool sendISE(const std::string& error);
 
-    void sendHybi(int opcode, const uint8_t* webSocketResponse, size_t messageLength);
+    void sendHybi(uint8_t opcode, const uint8_t* webSocketResponse,
+                  size_t messageLength);
 
     bool sendResponse(std::shared_ptr<Response> response);
 
     bool processHeaders(uint8_t* first, uint8_t* last);
     bool sendData(const std::string& type, const char* start, size_t size);
+    bool sendHeader(const std::string& type, size_t size);
+
+    // Delegated from ResponseWriter.
+    struct Writer;
+    void begin(ResponseCode responseCode, TransferEncoding encoding);
+    void header(const std::string &header, const std::string &value);
+    void payload(const void *data, size_t size, bool flush);
+    void finish(bool keepConnectionOpen);
+    void error(ResponseCode responseCode, const std::string &payload);
 
     struct Range {
         long start;
@@ -138,7 +151,7 @@ private:
     bool parseRanges(const std::string& range, std::list<Range>& ranges) const;
     bool sendStaticData();
 
-    int safeSend(const void* data, size_t size);
+    ssize_t safeSend(const void* data, size_t size);
 
     void bufferResponseAndCommonHeaders(ResponseCode code);
 
@@ -159,6 +172,10 @@ private:
     std::shared_ptr<WebSocket::Handler> _webSocketHandler;
     bool _shutdownByUser;
     std::unique_ptr<PageRequest> _request;
+    std::shared_ptr<Response> _response;
+    TransferEncoding _transferEncoding;
+    unsigned _chunk;
+    std::shared_ptr<Writer> _writer;
 
     enum State {
         INVALID,
@@ -167,11 +184,15 @@ private:
         HANDLING_HIXIE_WEBSOCKET,
         HANDLING_HYBI_WEBSOCKET,
         BUFFERING_POST_DATA,
+        AWAITING_RESPONSE_BEGIN,
+        SENDING_RESPONSE_HEADERS,
+        SENDING_RESPONSE_BODY
     };
     State _state;
 
     Connection(Connection& other) = delete;
     Connection& operator =(Connection& other) = delete;
+    void writeChunkHeader(size_t size);
 };
 
 }  // namespace seasocks

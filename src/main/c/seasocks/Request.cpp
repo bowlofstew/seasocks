@@ -1,4 +1,4 @@
-// Copyright (c) 2013, Matt Godbolt
+// Copyright (c) 2013-2016, Matt Godbolt
 // All rights reserved.
 // 
 // Redistribution and use in source and binary forms, with or without 
@@ -37,6 +37,7 @@ const char* Request::name(Verb v) {
     case Put: return "Put";
     case Post: return "Post";
     case Delete: return "Delete";
+    case Head: return "Head";
     default: return "???";
     }
 }
@@ -46,6 +47,7 @@ Request::Verb Request::verb(const char* verb) {
     if (std::strcmp(verb, "PUT") == 0) return Request::Put;
     if (std::strcmp(verb, "POST") == 0) return Request::Post;
     if (std::strcmp(verb, "DELETE") == 0) return Request::Delete;
+    if (std::strcmp(verb, "HEAD") == 0) return Request::Head;
     return Request::Invalid;
 }
 
